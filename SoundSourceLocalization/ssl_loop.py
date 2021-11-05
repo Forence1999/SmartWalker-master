@@ -10,7 +10,6 @@ from pyaudio import PyAudio, paInt16
 from SoundSourceLocalization.ssl_setup import *
 from SoundSourceLocalization.ssl_feature_extractor import FeatureExtractor
 # from SoundSourceLocalization.ssl_actor_critic import Actor, Critic
-from SoundSourceLocalization.ssl_map import Map
 from SoundSourceLocalization.ssl_audio_processor import *
 from SoundSourceLocalization.ssl_turning import SSLturning
 from SoundSourceLocalization.kws_detector import KwsDetector
@@ -26,6 +25,8 @@ from lib.audiolib import normalize_single_channel_to_target_level, audio_segment
 import ns_enhance_onnx
 
 from SoundSourceLocalization.ssl_DOA_model import DOA
+from ssl_agent import Agent
+from ssl_env import MAP_ENV
 
 pwd = os.path.abspath(os.path.abspath(__file__))
 father_path = os.path.abspath(os.path.dirname(pwd) + os.path.sep + "..")
@@ -38,6 +39,7 @@ class SSL:
         print('-' * 20 + 'init SSL class' + '-' * 20)
         # self.KWS = KwsDetector(CHUNK, RECORD_DEVICE_NAME, RECORD_WIDTH, CHANNELS,
         #                        SAMPLE_RATE, FORMAT, KWS_WAVE_PATH, KWS_MODEL_PATH, KWS_LABEL_PATH)
+        num_action = 8
         self.micro_mapping = np.array(range(CHANNELS), dtype=np.int)
         self.denoise = denoise
         self.device_index = self.__get_device_index__()
@@ -71,7 +73,7 @@ class SSL:
                 'name'     : '256ms',
                 'time_len' : 256. / 1000,
                 'threshold': 400,
-                'stepsize' : 256. / 1000/2
+                'stepsize' : 256. / 1000 / 2
             },
             '1s'   : {
                 'name'     : '1s',
@@ -95,6 +97,8 @@ class SSL:
         print('Loading DOA model...\n')
         self.doa = DOA(model_dir=os.path.abspath('./model/EEGNet/ckpt'), fft_len=self.fft_len,
                        num_gcc_bin=self.num_gcc_bin, num_mel_bin=self.num_mel_bin, fs=self.fs, )
+        self.env = MAP_ENV()
+        self.agent = Agent(alpha=1., num_action=num_action)
     
     def __get_device_index__(self):
         device_index = -1
@@ -312,80 +316,22 @@ class SSL:
         return final_segments, None
     
     def loop(self, event, control, source='test'):
-        self.init_micro_mapping()
+        # initialize microphones
+        if not self.debug:
+            self.init_micro_mapping()
         
         # initialize models
-        # map = Map()
-        # gccGenerator = GccGenerator()
-        # actor = Actor(GCC_BIAS, ACTION_SPACE, lr=0.004)
-        # critic = Critic(GCC_BIAS, ACTION_SPACE, lr=0.003, gamma=0.95)
-        # actor.load_trained_model(MODEL_PATH)
-        
-        # init at the first step
-        # state_last = None
-        # action_last = None
-        # direction_last = None
+        env = self.env
+        agent = self.agent
+        state, done = self.env.reset(is_online=False)
+        num_step = 0
+        reward_history = []
         
         # steps
         while True:
             event.wait()
-            # print('num_saved_sig: ', int(num_saved_sig))
-            # map.print_walker_status()
-            # map.detect_which_region()
-            
-            # final_file = None
-            
             # Record
-            # # todo, congest here for kws
-            # if num_saved_sig == 0:
-            #     print("congest in KWS ...")
-            #     self.KWS.slide_win_loop()
-            #     wakeup_wav = self.KWS.RANDOM_PREFIX + "win.wav"
-            #
-            #     denoised_sig_fname = str(num_saved_sig) + "_de.wav"
-            #
-            #     de_noise(os.path.join(self.KWS.WAV_PATH, wakeup_wav),
-            #              os.path.join(self.KWS.WAV_PATH, denoised_sig_fname))
-            #
-            #     if self.denoise is False:
-            #         final_file = wakeup_wav
-            #     else:
-            #         final_file = denoised_sig_fname
-            #
-            # else:
-            #     # active detection
-            #     print("start monitoring ... ")
-            #     while True:
-            #         event.wait()
-            #         # print("start monitoring ... ")
-            #         frames = self.monitor_from_4mics()
-            #
-            #         # store the signal
-            #         file_name = os.path.join(WAV_PATH, str(num_saved_sig) + ".wav")
-            #         self.savewav(file_name, frames)
-            #
-            #         # de-noise the signal into new file, then VAD and split
-            #         denoised_sig_fname = str(num_saved_sig) + '_denoised.wav'
-            #         de_noise(os.path.join(WAV_PATH, ini_sig_fname), os.path.join(WAV_PATH, denoised_sig_fname))
-            #
-            #         # if exceed, break, split to process, then action. After action done, begin monitor
-            #
-            #         if self.de is False:
-            #             final_file = ini_sig_fname
-            #         else:
-            #             final_file = denoised_sig_fname
-            #
-            #         if judge_active(os.path.join(WAV_PATH, final_file)):
-            #             print("Detected ... ")
-            #             break
-            #
-            # Split
-            
-            # produce action
-            """
-                use four mic file to be input to produce action
-            """
-            if self.debug:
+            if False:  # self.debug:
                 self.save_dir_name = 'self_collected'
                 ini_dir = os.path.join(WAV_PATH, self.save_dir_name, 'ini_signal')
                 ini_signals = self.read_multi_channel_audio(ini_dir, num_channel=CHANNELS)
@@ -397,40 +343,66 @@ class SSL:
                 # self.save_multi_channel_audio(ini_dir, ini_signals, fs=SAMPLE_RATE, norm=False, )
             
             audio_segments, drop_flag = self.preprocess_ini_signal(ini_signals)
-            # print('Number of preprocessed audio segments: ', len(audio_segments))
+            print('Number of preprocessed audio segments: ', len(audio_segments))
             direction = None
             if len(audio_segments) > 0:
+                num_step += 1
+                # 得到实时位置
+                
+                # 获取可行方向
+                availalbe_dircs = []
+                
+                # 选择行为前，mask掉不可行的方向
+                action = agent.choose_action(state)
+                # 强化
+                state_, reward, done, info = env.step(action)
+                # self.agent.learn(state, action, reward, state_, done)
+                state = state_
+                reward_history.append(reward)
+                
+                if num_step % 20 == 0:
+                    # 保存模型
+                    pass
                 
                 gcc_feature_batch = self.doa.extract_gcc_phat_4_batch(audio_segments)
                 # length=len(gcc_feature_batch)
                 gcc_feature = np.mean(gcc_feature_batch, axis=0)[np.newaxis,]
+                ### 接入强化学习 learn
                 direction_prob, direction_cate, = self.doa.predict(gcc_feature)
                 # print(direction_prob)
                 print('Pridict value: ', direction_cate)
                 # direction = stats.mode(direction_cate)[0][0] * 45
-                direction = (360-(int(direction_cate) * 45  - 90)) % 360
+                direction = (360 - (int(direction_cate) * 45 - 90)) % 360
                 print("producing action ...\n", 'Direction', direction)
-                SSLturning(control, direction)
-                control.speed = STEP_SIZE / FORWARD_SECONDS
-                control.radius = 0
-                control.omega = 0
-                time.sleep(FORWARD_SECONDS)
-                control.speed = 0
-                print("movement done.")
-            #
-            # print('Wait ~ ')
+                if not self.debug:
+                    SSLturning(control, direction)
+                    control.speed = STEP_SIZE / FORWARD_SECONDS
+                    control.radius = 0
+                    control.omega = 0
+                    time.sleep(FORWARD_SECONDS)
+                    control.speed = 0
+                    print("movement done.")
+                print('Wait ~ ')
 
 
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     
-    ssl = SSL(denoise=True, seg_len='256ms', debug=False)
-    cd = CD.ControlDriver(left_right=0)
-    # cd = ''
-    temp = threading.Event()
-    temp.set()
-    p2 = threading.Thread(target=cd.control_part, args=())
-    p1 = threading.Thread(target=ssl.loop, args=(temp, cd,))
+    is_debug = True
+    ssl = SSL(denoise=True, seg_len='256ms', debug=is_debug)
     
-    p2.start()
-    p1.start()
+    if is_debug:
+        cd = ''
+        temp = threading.Event()
+        temp.set()
+        p1 = threading.Thread(target=ssl.loop, args=(temp, cd,))
+        p1.start()
+    else:
+        cd = CD.ControlDriver(left_right=0)
+        temp = threading.Event()
+        temp.set()
+        p2 = threading.Thread(target=cd.control_part, args=())
+        p1 = threading.Thread(target=ssl.loop, args=(temp, cd,))
+        
+        p2.start()
+        p1.start()
