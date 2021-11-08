@@ -26,12 +26,16 @@ import ns_enhance_onnx
 
 from SoundSourceLocalization.ssl_DOA_model import DOA
 from ssl_agent import Agent
-from ssl_env import MAP_ENV
+from ssl_env import MAP_ENV, ONLINE_MAP_ENV
 
 pwd = os.path.abspath(os.path.abspath(__file__))
 father_path = os.path.abspath(os.path.dirname(pwd) + os.path.sep + "..")
 sys.path.append(father_path)
 import Driver.ControlOdometryDriver as CD
+from Communication.Soundlocalization_socket import client
+
+
+# from Communication.Soundlocalization_socket_local import server_receive, server_transmit
 
 
 class SSL:
@@ -97,8 +101,11 @@ class SSL:
         print('Loading DOA model...\n')
         self.doa = DOA(model_dir=os.path.abspath('./model/EEGNet/ckpt'), fft_len=self.fft_len,
                        num_gcc_bin=self.num_gcc_bin, num_mel_bin=self.num_mel_bin, fs=self.fs, )
-        self.env = MAP_ENV()
-        self.agent = Agent(alpha=1., num_action=num_action)
+        self.env = ONLINE_MAP_ENV()
+        self.save_model_steps = 3
+        self.save_ac_model = './model/ac_model'
+        self.agent = Agent(alpha=1., num_action=num_action, gamma=0.99, ac_model_dir=self.save_ac_model,
+                           load_ac_model=True, save_model_steps=self.save_model_steps)
     
     def __get_device_index__(self):
         device_index = -1
@@ -315,7 +322,13 @@ class SSL:
         
         return final_segments, None
     
-    def loop(self, event, control, source='test'):
+    def get_crt_position(self):
+        while True:
+            mesg = client.receive()
+            if mesg != '':
+                return mesg
+    
+    def loop(self, event, control, ):
         # initialize microphones
         if not self.debug:
             self.init_micro_mapping()
@@ -323,57 +336,74 @@ class SSL:
         # initialize models
         env = self.env
         agent = self.agent
-        state, done = self.env.reset(is_online=False)
+        state, state_, = None, None,
+        node, node_ = None, None
+        action, action_ = None, None
+        reward, reward_ = None, None
+        done = False
         num_step = 0
         reward_history = []
-        
+        position = None
         # steps
         while True:
             event.wait()
-            # Record
-            if False:  # self.debug:
-                self.save_dir_name = 'self_collected'
-                ini_dir = os.path.join(WAV_PATH, self.save_dir_name, 'ini_signal')
-                ini_signals = self.read_multi_channel_audio(ini_dir, num_channel=CHANNELS)
-            else:
-                # self.save_dir_name = 'test'
-                frames = self.monitor_from_4mics()
-                ini_signals = self.split_channels_from_frames(frames=frames, num_channel=CHANNELS, mapping_flag=True)
-                # ini_dir = os.path.join(WAV_PATH, self.save_dir_name, 'ini_signal')
-                # self.save_multi_channel_audio(ini_dir, ini_signals, fs=SAMPLE_RATE, norm=False, )
+            # Record audios
+            frames = self.monitor_from_4mics()
+            ini_signals = self.split_channels_from_frames(frames=frames, num_channel=CHANNELS, mapping_flag=True)
+            # save data
+            # ini_dir = os.path.join(WAV_PATH, self.save_dir_name, 'ini_signal')
+            # self.save_multi_channel_audio(ini_dir, ini_signals, fs=SAMPLE_RATE, norm=False, )
             
+            # preprocess initial audios
             audio_segments, drop_flag = self.preprocess_ini_signal(ini_signals)
             print('Number of preprocessed audio segments: ', len(audio_segments))
             direction = None
-            if len(audio_segments) > 0:
+            
+            if len(audio_segments) >= 0:  # TODO
                 num_step += 1
+                
+                '''------------------------- 获取可行方向 -----------------------------'''
                 # 得到实时位置
+                if position is not None:
+                    real_loca = position
+                    real_abs_doa = 1
+                else:
+                    real_position = input('please input current position and direction')
+                    real_position = list(map(float, real_position.split(' ')))
+                    real_loca, real_abs_doa = real_position[:2], int(real_position[2])
                 
                 # 获取可行方向
-                availalbe_dircs = []
+                real_node = env.get_graph_node_idx(position=real_loca)
+                node_ = real_node
+                abs_availalbe_dircs = env.get_availalbe_dircs(node_idx=real_node)  # 此处方向应该以小车为坐标系,但是获得的方向是绝对坐标系。
+                # print('availalbe_dircs: ', availalbe_dircs)
+                abs_dirc_mask = np.array(np.array(abs_availalbe_dircs) != None)
+                rela_dirc_mask = np.roll(abs_dirc_mask, shift=-real_abs_doa)
+                # print('rela_dirc_mask: ', rela_dirc_mask)
+                dirc_digit = np.where(rela_dirc_mask)
+                print('crt_location: ', real_loca, '\n', "real_node: ", real_node, '\n', 'crt_abs_doa: ', real_abs_doa,
+                      '\n', 'avaliable_dirc_digit: ', list(dirc_digit))
                 
-                # 选择行为前，mask掉不可行的方向
-                action = agent.choose_action(state)
-                # 强化
-                state_, reward, done, info = env.step(action)
-                # self.agent.learn(state, action, reward, state_, done)
-                state = state_
-                reward_history.append(reward)
-                
-                if num_step % 20 == 0:
-                    # 保存模型
-                    pass
-                
-                gcc_feature_batch = self.doa.extract_gcc_phat_4_batch(audio_segments)
-                # length=len(gcc_feature_batch)
-                gcc_feature = np.mean(gcc_feature_batch, axis=0)[np.newaxis,]
+                '''--------------------------- 强化学习 -------------------------------'''
+                # update state
+                # gcc_feature_batch = self.doa.extract_gcc_phat_4_batch(audio_segments)
+                # gcc_feature = np.mean(gcc_feature_batch, axis=0)[np.newaxis,]
+                # state_ = gcc_feature
+                state_ = np.ones((1, 6, 128))
                 ### 接入强化学习 learn
-                direction_prob, direction_cate, = self.doa.predict(gcc_feature)
+                # 选择行为前，mask掉不可行的方向
+                action_ = agent.choose_action(state_, dirc_mask=rela_dirc_mask)
+                # _, direction_cate, = self.doa.predict(gcc_feature)
                 # print(direction_prob)
-                print('Pridict value: ', direction_cate)
+                print('Predicted action_: ', action_)
                 # direction = stats.mode(direction_cate)[0][0] * 45
-                direction = (360 - (int(direction_cate) * 45 - 90)) % 360
-                print("producing action ...\n", 'Direction', direction)
+                # direction = (360 - (int(action_) * 45 - 90)) % 360
+                # print("producing action ...\n", 'Direction', direction)
+                aim_loca = self.env.next_position_from_rela_action(real_node, action=action_, abs_doa=real_abs_doa)
+                position = aim_loca
+                print('aim_loca: ', aim_loca)
+                
+                ### 接入Owen的模块，传入aim_loca
                 if not self.debug:
                     SSLturning(control, direction)
                     control.speed = STEP_SIZE / FORWARD_SECONDS
@@ -383,6 +413,19 @@ class SSL:
                     control.speed = 0
                     print("movement done.")
                 print('Wait ~ ')
+                
+                # 维护 done TODO
+                # 强化
+                if state is not None:
+                    # state_, reward, done, info = env.step(action)
+                    # reward = reward_history[-1]
+                    agent.learn(state, action, reward, state_, done)
+                reward_ = float(input('Please input the reward for this action: '))
+                
+                state = state_
+                node = node_
+                action = action_
+                reward = reward_
 
 
 if __name__ == '__main__':

@@ -13,7 +13,7 @@ import random
 import warnings
 import numpy as np
 from copy import deepcopy
-from ssl_map import Map_graph
+from ssl_map import Map_graph, ONLINE_Map_graph
 import pickle
 
 
@@ -166,6 +166,90 @@ class MAP_ENV():
     
     def render(self):
         pass
+
+
+class ONLINE_MAP_ENV():
+    def __init__(self, num_actions=8):
+        super(ONLINE_MAP_ENV, self).__init__()
+        self.map = ONLINE_Map_graph()
+        self.num_actions = num_actions
+    
+    def reset(self, is_online=False):
+        state, done = None, False
+        return state, done
+    
+    def next_position(self, id, abs_action):
+        next_id = self.next_id(id, abs_action)
+        return self.map.coordinates[next_id]
+    
+    def next_id(self, id, abs_action):
+        next_id = self.map.nodes[id].get_neighbor()[abs_action]
+        return next_id
+    
+    def next_position_from_rela_action(self, id, action, abs_doa):
+        abs_action = self.cal_abs_action(action, abs_doa)
+        next_id = self.next_id(id, abs_action)
+        return self.map.coordinates[next_id]
+    
+    def next_id_from_rela_action(self, id, action, abs_doa):
+        abs_action = self.cal_abs_action(action, abs_doa)
+        next_id = self.map.nodes[id].get_neighbor()[abs_action]
+        return next_id
+    
+    def cal_abs_action(self, action, abs_doa):
+        return (action + abs_doa + self.num_actions) % self.num_actions
+    
+    def cal_right_action(self, src_id, wk_id, ):
+        abs_action = self.map.find_relative_direction(src_id, wk_id, )  # TODO
+        return (abs_action - self.abs_doa + 2 + self.num_actions) % self.num_actions
+    
+    def step(self, action):
+        crt_src_id = self.src_id[-1]
+        abs_action = self.cal_abs_action(action)
+        next_id = self.next_position(self.wk_id, abs_action)
+        true_abs_action = self.map.find_relative_direction(next_id, self.wk_id, )
+        right_action = self.cal_right_action(crt_src_id, self.wk_id)
+        if next_id == crt_src_id:
+            self.src_id.pop()
+        elif not self.map.is_data_neighbor(crt_src_id, next_id):
+            intermediary_src = self.map.find_intermediary_src(crt_src_id, next_id)
+            for i in intermediary_src:
+                self.src_id.append(i)
+                if self.map.is_data_neighbor(i, next_id):
+                    break
+        self.wk_id = next_id
+        self.abs_doa = true_abs_action
+        
+        # setting rewards
+        reward = -1
+        if right_action == action:
+            reward += 2
+        elif abs((right_action - action + self.num_actions) % self.num_actions) <= 1:
+            reward += 1
+        else:
+            reward += -1
+        
+        if len(self.src_id) == 0:
+            done = True
+            reward += 100
+            state_ = None
+        else:
+            done = False
+            crt_src_id = self.src_id[-1]
+            state_ = self.get_state(crt_src_id, self.wk_id, self.abs_doa)
+        
+        self.state = state_
+        info = None
+        return state_, reward, done, info
+    
+    def render(self):
+        pass
+    
+    def get_graph_node_idx(self, position):
+        return self.map.get_region_idx(position)
+    
+    def get_availalbe_dircs(self, node_idx):
+        return self.map.get_node_neighbors(node_idx)
 
 
 if __name__ == '__main__':

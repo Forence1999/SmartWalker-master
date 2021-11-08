@@ -26,12 +26,11 @@ import warnings
 
 
 class ActorCriticNetwork(keras.Model):
-    def __init__(self, num_action=8, base_model_dir='../model/base_model', load_ac_model=False,
-                 ac_model_dir='../model/ac_model', norm_rate=0.25, optimizer=None, ):
+    def __init__(self, num_action=8, base_model_dir='./model/EEGNet/', load_ac_model=False,
+                 ac_model_dir='./model/ac_model/', norm_rate=0.25, ):
         super(ActorCriticNetwork, self).__init__()
         self.num_action = num_action
         self.norm_rate = norm_rate
-        self.optimizer = optimizer
         # init model_dir
         self.base_model_dir = base_model_dir
         self.base_ckpt_dir = os.path.join(self.base_model_dir, 'ckpt')
@@ -40,12 +39,12 @@ class ActorCriticNetwork(keras.Model):
         if load_ac_model:
             self.ac_model = self.__load_ac_model__()
         else:
-            self.ac_model = self.__init_ac_model__(self.norm_rate)
-        self.ac_model = self.__compile_ac_model__()
-        # self.target_ac_model = self.update_target_ac_model()
+            self.ac_model = self.__init_ac_model__()
     
-    def __init_ac_model__(self, norm_rate):
+    def __init_ac_model__(self, ):
+        norm_rate = self.norm_rate
         print('-' * 20, 'Initializing a new actor-critic model!', '-' * 20, )
+        print(os.path.abspath(self.base_ckpt_dir))
         base_model = tf.keras.models.load_model(self.base_ckpt_dir)
         print('-' * 20, base_model, '-' * 20, )
         base_model.summary()
@@ -72,23 +71,23 @@ class ActorCriticNetwork(keras.Model):
         return ac_model
     
     def __load_ac_model__(self):
-        print('-' * 20, 'Loading pre-trained actor-critic model!', '-' * 20, )
-        return tf.keras.models.load_model.load(self.ac_ckpt_dir)
+        try:
+            print('-' * 20, 'Loading pre-trained Actor-Critic model!', '-' * 20, )
+            return tf.keras.models.load_model.load(self.ac_ckpt_dir)
+        except:
+            print('-' * 20,
+                  'Fail to load the pre-trained Actor-Critic model! Initialized model will be used for Actor-Critic!',
+                  '-' * 20, )
+            return self.__init_ac_model__()
     
-    def update_target_ac_model(self):
-        self.target_ac_model = deepcopy(self.ac_model)
-        # keras.models.clone_model(model)
-        # model.get_weights()
-        # model.set_weights(weights)
-        return self.target_ac_model
+    def compile_ac_model(self, optimizer, **kwargs):
+        self.ac_model.compile(optimizer=optimizer, **kwargs)
+        return self.ac_model
     
     def save_model(self):
-        print('-' * 20, 'Saving actor-critic model!', '-' * 20, )
+        print('-' * 20, 'Saving Actor-Critic model!', '-' * 20, )
+        os.makedirs(self.ac_ckpt_dir, exist_ok=True)
         self.ac_model.save(self.ac_ckpt_dir)
-    
-    def __compile_ac_model__(self):
-        self.ac_model.compile(optimizer=self.optimizer, )
-        return self.ac_model
     
     def call(self, state, training=False, **kwargs):
         return self.ac_model(state, training=training, **kwargs)

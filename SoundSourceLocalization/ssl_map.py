@@ -63,9 +63,31 @@ class Map_graph(object):
                        [530, 220],
                        [170, 100],
                        [550, 15]]
+        regions = [[None, None, None, None],
+                   [418, 4, 450, 145],
+                   [250, 145, 418, 175],
+                   [418, 175, 450, 515],
+                   [250, 515, 418, 545],
+                   [210, 175, 250, 250],
+                   [None, None, None, None],
+                   [None, None, None, None],
+                   [42, 250, 210, 322],
+                   [12, 180, 49, 250],
+                   [12, 317, 42, 500],
+                   [210, 317, 250, 515],
+                   [418, 145, 450, 175],
+                   [418, 515, 450, 545],
+                   [210, 250, 250, 317],
+                   [None, None, None, None],
+                   [12, 250, 42, 317],
+                   [210, 145, 250, 175],
+                   [210, 515, 250, 545],
+                   [None, None, None, None],
+                   [12, 500, 42, 800]]
         map_adj_ls = np.load('../data/adjacency_list.npz')['adjacency_list']
         self.num_node = len(coordinates)
         self.coordinates = np.array(coordinates)
+        self.regions = np.array(regions)
         self.map_adj_ls = np.array(map_adj_ls)
         self.map_graph = self.construct_map_graph()
         self.data_adj_ls = self.cal_data_adjacency_list()
@@ -220,6 +242,142 @@ class Map_graph(object):
     
     def get_coordinate(self, id):
         return self.nodes[id].get_coordinate()
+    
+    def get_region_idx(self, position):
+        x, y = position
+        for i, node in enumerate(self.nodes):
+            if node is not None:
+                x1, y1, x2, y2 = self.regions[i]
+                if (x1 <= x <= x2 or x2 <= x <= x1) and (y1 <= y <= y2 or y2 <= y <= y1):
+                    return i
+        return None
+
+
+class ONLINE_Map_graph(object):
+    def __init__(self, ):
+        super(ONLINE_Map_graph, self).__init__()
+        coordinates = [[None, None],
+                       [60, 425],
+                       [160, 320],
+                       [340, 425],
+                       [530, 320],
+                       [215, 220],
+                       [170, 160],
+                       [220, 100],
+                       [280, 160],
+                       [220, 15],
+                       [460, 15],
+                       [420, 220],
+                       [160, 425],
+                       [530, 425],
+                       [280, 220],
+                       [280, 100],
+                       [280, 15],
+                       [160, 220],
+                       [530, 220],
+                       [170, 100],
+                       [550, 15]]
+        regions = [[None, None, None, None],
+                   [4, 418, 145, 450],
+                   [145, 250, 175, 418],
+                   [175, 418, 515, 450],
+                   [515, 250, 545, 418],
+                   [175, 210, 250, 250],
+                   [None, None, None, None],
+                   [None, None, None, None],
+                   [250, 42, 322, 210],
+                   [180, 12, 250, 49],
+                   [317, 12, 500, 42],
+                   [317, 210, 515, 250],
+                   [145, 418, 175, 450],
+                   [515, 418, 545, 450],
+                   [250, 210, 317, 250],
+                   [None, None, None, None],
+                   [250, 12, 317, 42],
+                   [145, 210, 175, 250],
+                   [515, 210, 545, 250],
+                   [None, None, None, None],
+                   [500, 12, 800, 42]]
+        map_adj_ls = np.load('./map_data/adjacency_list.npz')['adjacency_list']
+        self.num_node = len(coordinates)
+        self.coordinates = np.array(coordinates)
+        self.regions = np.array(regions)
+        self.map_adj_ls = np.array(map_adj_ls)
+        self.map_graph = self.construct_map_graph()
+        
+        self.nodes = np.array([Node() for _ in range(self.num_node)])
+        self.__init_nodes__()
+        # self.print_map_graph()
+    
+    def __init_nodes__(self):
+        node_idx = np.arange(self.num_node)
+        for i, adj_ls in enumerate(self.map_adj_ls):
+            if np.all(adj_ls == np.inf):
+                self.nodes[i] = None
+            else:
+                neighbors = np.full((8,), None)
+                neighbors[np.array(adj_ls[adj_ls != np.inf], dtype=int)] = node_idx[adj_ls != np.inf]
+                # neighbors[np.array(adj_ls[adj_ls != np.inf], dtype=int)] = self.nodes[adj_ls != np.inf]
+                self.nodes[i].set_neighbors(neighbors)
+                self.nodes[i].set_coordinate(self.coordinates[i])
+                self.nodes[i].set_id(i)
+    
+    def print_map_graph(self):
+        print('-' * 20, 'Graph of nodes', '-' * 20, )
+        for i, node in enumerate(self.nodes):
+            if node is None:
+                continue
+            print('id: ', node.id)
+            print('directions: ', list(range(8)))
+            print('neighbors:  ', node.neighbors)
+        print('-' * 20, 'Finish printing graph', '-' * 20, )
+    
+    def construct_map_graph(self, ):
+        map_adj_ls = np.array(self.map_adj_ls)
+        row, col = np.array(np.where(map_adj_ls != np.inf))
+        
+        G = nx.Graph()
+        for i in {*row, *col}:
+            G.add_node(i)
+        for i, j in list(zip(row, col)):
+            distance = np.linalg.norm(self.coordinates[i] - self.coordinates[j], ord=2)
+            G.add_weighted_edges_from([(i, j, distance)])
+        
+        return G
+    
+    def find_id_by_direction(self, base_id, direction):  # find the id in the specific direction of base_id
+        return self.nodes[base_id].get_neighbor()[direction]
+    
+    def find_relative_direction(self, src_id, wk_id, ):  # find where src_id is relative to wk_id
+        # TODO 仅支持当前地图
+        path = self.find_shortest_map_path(src_id, wk_id, )
+        wk_neighbors = self.nodes[wk_id].get_neighbor()
+        return np.where(wk_neighbors == path[-2])[0][0]
+    
+    def cal_relative_doa(self, src_id, wk_id, abs_doa):
+        src_2_wk_doa = self.find_relative_direction(src_id, wk_id)
+        rela_doa = (src_2_wk_doa - abs_doa + 2 + 16) % 8
+        return rela_doa
+    
+    def find_shortest_map_path(self, src_id, wk_id):
+        path = nx.dijkstra_path(self.map_graph, source=src_id, target=wk_id)
+        # distance = nx.dijkstra_path_length(self.map_graph, source=src_id, target=wk_id)
+        return path
+    
+    def get_coordinate(self, id):
+        return self.nodes[id].get_coordinate()
+    
+    def get_region_idx(self, position):
+        x, y = position
+        for i, node in enumerate(self.nodes):
+            if node is not None:
+                x1, y1, x2, y2 = self.regions[i]
+                if (x1 <= x <= x2 or x2 <= x <= x1) and (y1 <= y <= y2 or y2 <= y <= y1):
+                    return i
+        return None
+    
+    def get_node_neighbors(self, node_idx):
+        return self.nodes[node_idx].get_neighbor()
 
 
 if __name__ == '__main__':

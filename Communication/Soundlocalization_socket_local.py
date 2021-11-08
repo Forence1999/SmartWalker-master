@@ -3,33 +3,32 @@
 # Author: Owen Yip
 # Mail: me@owenyip.com
 #
-from datetime import datetime
 import os, sys
+import threading
+import numpy as np
+import time
+import zmq
+import json
 
 pwd = os.path.abspath(os.path.abspath(__file__))
 father_path = os.path.abspath(os.path.dirname(pwd) + os.path.sep + "..")
 sys.path.append(father_path)
 
-import numpy as np
-import time
-import zmq
-import json
-import threading
 
-
-class CLIENT:
+class SERVER:
     def __init__(self):
+        
         context = zmq.Context()
         sl_port = "5454"
         wk_port = "5455"
-        self.transmit_topic = "NAV_SL_LOCATION"
-        self.receive_topic = "NAV_WALKER_POSE"
+        self.transmit_topic = "NAV_WALKER_POSE"
+        self.receive_topic = "NAV_SL_LOCATION"
         
         self.transmit_socket = context.socket(zmq.PUB)
-        self.transmit_socket.bind("tcp://*:%s" % wk_port)
+        self.transmit_socket.bind("tcp://*:%s" % sl_port)
         
         self.receive_socket = context.socket(zmq.SUB)
-        self.receive_socket.connect("tcp://127.0.0.1:%s" % sl_port)
+        self.receive_socket.connect("tcp://127.0.0.1:%s" % wk_port)
         self.receive_socket.setsockopt_string(zmq.SUBSCRIBE, self.receive_topic)
     
     def transmit(self, message):
@@ -55,18 +54,9 @@ class CLIENT:
 
 if __name__ == "__main__":
     msg = 'server to client'
+    server = SERVER()
+    p2 = threading.Thread(target=server.transmit_forever, args=((msg,)))
+    p1 = threading.Thread(target=server.receive_forever, args=())
     
-    client = CLIENT()
-    p1 = threading.Thread(target=client.transmit_forever, args=((msg,)))
-    p1.start()
-    
-    p2 = threading.Thread(target=client.receive_forever, args=())
     p2.start()
-    
-    # while True:
-    #     msg = input('Please input the aim location:')
-    #     msg = list(map(int, msg.split(',')))
-    #     msg = json.dumps(msg)
-    #     p2 = threading.Thread(target=client.transmit, args=((msg,)))
-    #     p2.start()
-    #     p2.join()
+    p1.start()
