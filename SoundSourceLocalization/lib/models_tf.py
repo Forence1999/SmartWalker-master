@@ -6,6 +6,8 @@ from tensorflow.keras.regularizers import l1_l2, l2
 from tensorflow.keras.constraints import max_norm
 from tensorflow.keras.losses import CategoricalCrossentropy
 from tensorflow.keras import backend as K
+import tensorflow.keras.backend as K
+K.set_image_data_format('channels_first')
 
 
 # from .utils_tf import BaseClassicalModel
@@ -278,68 +280,6 @@ class TSLeNet5(tf.keras.Model):  # s model
         return out
 
 
-#
-# # define the classes of DTW and soft-DTW-Probabilistic
-# class DTW(BaseClassicalModel):
-#
-#     def __init__(self, *args, neighbours=1, name=None, **kwargs):
-#         super(DTW, self).__init__(name=name, **kwargs)
-#
-#         self.neighbours = neighbours
-#         self.model = DTW.KnnDTW(neighbours)
-#
-#     def fit(self, X, Y, training=True, **kwargs):
-#         self.model.fit(X, Y)
-#
-#     def predict(self, X, training=False, **kwargs):
-#         mode_label, mode_proba = self.model.predict(X)
-#         return mode_label
-#
-#
-# class DTWProbabilistic(BaseClassicalModel):
-#
-#     def __init__(self, *args, name=None, **kwargs):
-#         if name is None:
-#             name = self.__class__.__name__
-#
-#         super(DTWProbabilistic, self).__init__(name=name, **kwargs)
-#
-#         self.neighbours = 1
-#         self.model = DTW.KnnDTW(self.neighbours)
-#
-#     def fit(self, X, Y, training=True, **kwargs):
-#         self.model.fit(X, Y)
-#
-#     def predict(self, X, training=False, **kwargs):
-#         probas, labels = self.model.predict_proba(X)
-#         return probas
-#
-
-class FCN(tf.keras.Model):
-    
-    def __init__(self, num_classes, name=None, **kwargs):
-        if name is None:
-            name = self.__class__.__name__
-        
-        super(FCN, self).__init__(name=name, **kwargs)
-        
-        self.flatten = tf.keras.layers.Flatten()
-        self.dense1 = tf.keras.layers.Dense(256, activation='relu')
-        self.dense2 = tf.keras.layers.Dense(512, activation='relu')
-        self.out = tf.keras.layers.Dense(num_classes, activation='linear')
-    
-    def call(self, inputs, training=None, mask=None):
-        x = self.flatten(inputs)
-        x = self.dense1(x)
-        x = self.dense2(x)
-        out = self.out(x)
-        
-        if training is False:
-            out = tf.nn.softmax(out, axis=-1)
-        
-        return out
-
-
 class LeNet5(tf.keras.Model):
     
     def __init__(self, num_classes, name=None, **kwargs):
@@ -371,3 +311,9 @@ class LeNet5(tf.keras.Model):
             out = tf.nn.softmax(out, axis=-1)
         
         return out
+
+
+if __name__ == '__main__':
+    
+    model = EEGNet(nb_classes=8)
+    model.summary()

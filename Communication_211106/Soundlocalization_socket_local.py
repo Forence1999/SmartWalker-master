@@ -32,14 +32,18 @@ class SERVER:
         self.receive_socket.setsockopt_string(zmq.SUBSCRIBE, self.receive_topic)
     
     def transmit(self, message):
+        message = json.dumps(message)
         msg = "%s%s" % (self.transmit_topic, message)
         self.transmit_socket.send_string(msg)
         print("Sending data: %s" % msg)
     
     def transmit_forever(self, message):
+        i = 0
         while True:
-            self.transmit(message)
-            time.sleep(1)
+            self.transmit(str(i))
+            i += 1
+            i %= 100000
+            # time.sleep(1)
     
     def receive(self):
         message = self.receive_socket.recv_string()

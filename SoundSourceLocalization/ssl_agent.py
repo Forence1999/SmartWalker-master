@@ -47,17 +47,19 @@ class Agent:
                                                ac_model_dir=ac_model_dir, )
         self.replay_buffer = ReplayMemory(100)
     
-    def choose_action(self, state, dirc_mask=None):
+    def choose_action(self, state, dirc_mask=None, sample=True):
         state = tf.convert_to_tensor([state])
         _, probs = self.actor_critic(state, training=False)
         if dirc_mask is not None:
             probs = probs * dirc_mask
-        action_prob = tfp.distributions.Categorical(probs=probs)  # TODO 要再添加softmax吗？好像不需要，方便以后修改为递归寻找
-        action = action_prob.sample()
+        if sample:
+            action_prob = tfp.distributions.Categorical(probs=probs)  # TODO 要再添加softmax吗？好像不需要，方便以后修改为递归寻找
+            action = action_prob.sample()[0]
+        else:
+            action = np.argmax(probs)
         # log_prob = action_prob.log_prob(action)
         self.action = action
-        
-        return action.numpy()[0]
+        return np.array(action)
     
     def learn(self, state, action, reward, state_, done):
         state = tf.convert_to_tensor([state], dtype=tf.float32)
@@ -69,7 +71,7 @@ class Agent:
             # with tf.GradientTape(persistent=True) as tape:
             state_value, probs = self.actor_critic(state, training=True)
             state_value = tf.squeeze(state_value)
-            action_probs = tfp.distributions.Categorical(probs=probs) #TODO 需要mask吗？
+            action_probs = tfp.distributions.Categorical(probs=probs)  # TODO 需要mask吗？
             log_prob = action_probs.log_prob(action)
             if not done:
                 state_value_, _ = self.actor_critic(state_, training=False)

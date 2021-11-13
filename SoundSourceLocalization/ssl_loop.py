@@ -16,6 +16,7 @@ from SoundSourceLocalization.kws_detector import KwsDetector
 import time
 import sys
 import os
+import json
 import threading
 import random
 from lib import utils
@@ -32,7 +33,7 @@ pwd = os.path.abspath(os.path.abspath(__file__))
 father_path = os.path.abspath(os.path.dirname(pwd) + os.path.sep + "..")
 sys.path.append(father_path)
 import Driver.ControlOdometryDriver as CD
-from Communication.Soundlocalization_socket import client
+from Communication.Soundlocalization_socket import CLIENT
 
 
 # from Communication.Soundlocalization_socket_local import server_receive, server_transmit
@@ -105,7 +106,8 @@ class SSL:
         self.save_model_steps = 3
         self.save_ac_model = './model/ac_model'
         self.agent = Agent(alpha=1., num_action=num_action, gamma=0.99, ac_model_dir=self.save_ac_model,
-                           load_ac_model=True, save_model_steps=self.save_model_steps)
+                           load_ac_model=False, save_model_steps=self.save_model_steps)
+        self.client = CLIENT()
     
     def __get_device_index__(self):
         device_index = -1
@@ -322,11 +324,41 @@ class SSL:
         
         return final_segments, None
     
+    def convert_owen_dir_2_digit(self, rad):
+        rad = rad if (rad >= 0) else (rad + 2 * np.pi)
+        degree = rad * 180 / np.pi
+        dir_digit = (int(degree + 22.5) // 45 + 8 - 2) % 8
+        print('degree: ', degree, 'dir_digit: ', dir_digit)
+        
+        return dir_digit
+    
+    def convert_owen_location_2_map(self, location):
+        location = [location[0] - 40, location[1] - 12]
+        return location
+    
+    def convert_map_location_2_owen(self, location):
+        location = [location[0] + 40, location[1] + 12]
+        return location
+    
     def get_crt_position(self):
+        # message = '[320.5940246582031,201.4725799560547,-1.5714188814163208]'
         while True:
-            mesg = client.receive()
-            if mesg != '':
-                return mesg
+            message = self.client.receive()
+            if message != '':
+                break
+        print('End receiving: ', message)
+        message = json.loads(message)
+        location = self.convert_owen_location_2_map(message[0:2])
+        dir_digit = self.convert_owen_dir_2_digit(message[2])
+        
+        return location, dir_digit
+    
+    def send_crt_position(self, position, ):
+        (y, x) = self.convert_map_location_2_owen(position)
+        message = [int(y), int(x)]
+        print('Starting to send')
+        self.client.transmit(message=message)
+        print('End sending: ', message)
     
     def loop(self, event, control, ):
         # initialize microphones
@@ -335,6 +367,7 @@ class SSL:
         
         # initialize models
         env = self.env
+        doa = self.doa
         agent = self.agent
         state, state_, = None, None,
         node, node_ = None, None
@@ -344,6 +377,7 @@ class SSL:
         num_step = 0
         reward_history = []
         position = None
+        
         # steps
         while True:
             event.wait()
@@ -357,62 +391,65 @@ class SSL:
             # preprocess initial audios
             audio_segments, drop_flag = self.preprocess_ini_signal(ini_signals)
             print('Number of preprocessed audio segments: ', len(audio_segments))
-            direction = None
             
-            if len(audio_segments) >= 0:  # TODO
+            if len(audio_segments) > 0:  # TODO
                 num_step += 1
-                
+                print('-' * 20, num_step, '-' * 20)
                 '''------------------------- 获取可行方向 -----------------------------'''
-                # 得到实时位置
-                if position is not None:
-                    real_loca = position
-                    real_abs_doa = 1
-                else:
-                    real_position = input('please input current position and direction')
-                    real_position = list(map(float, real_position.split(' ')))
-                    real_loca, real_abs_doa = real_position[:2], int(real_position[2])
-                
+                # 获取实时位置
+                # if position is not None:
+                #     crt_loca = position
+                #     crt_abs_doa = 1
+                # else:
+                #     crt_position = input('please input current position and direction')
+                #     crt_position = '280 160 2'
+                #     crt_position = list(map(float, crt_position.split(' ')))
+                #     crt_loca, crt_abs_doa = crt_position[:2], int(crt_position[2])
+                crt_loca, crt_abs_doa = self.get_crt_position()
+                print('crt_location: ', crt_loca, 'crt_abs_doa: ', crt_abs_doa)
                 # 获取可行方向
-                real_node = env.get_graph_node_idx(position=real_loca)
-                node_ = real_node
-                abs_availalbe_dircs = env.get_availalbe_dircs(node_idx=real_node)  # 此处方向应该以小车为坐标系,但是获得的方向是绝对坐标系。
+                crt_node = env.get_graph_node_idx(position=crt_loca)
+                node_ = crt_node
+                abs_availalbe_dircs = env.get_availalbe_dircs(node_idx=crt_node)  # 此处方向应该以小车为坐标系,但是获得的方向是绝对坐标系。
                 # print('availalbe_dircs: ', availalbe_dircs)
                 abs_dirc_mask = np.array(np.array(abs_availalbe_dircs) != None)
-                rela_dirc_mask = np.roll(abs_dirc_mask, shift=-real_abs_doa)
+                rela_dirc_mask = np.roll(abs_dirc_mask, shift=-crt_abs_doa)
                 # print('rela_dirc_mask: ', rela_dirc_mask)
                 dirc_digit = np.where(rela_dirc_mask)
-                print('crt_location: ', real_loca, '\n', "real_node: ", real_node, '\n', 'crt_abs_doa: ', real_abs_doa,
-                      '\n', 'avaliable_dirc_digit: ', list(dirc_digit))
+                print("crt_node: ", crt_node, 'avaliable_rela_dirc_digit: ', list(dirc_digit))
                 
                 '''--------------------------- 强化学习 -------------------------------'''
                 # update state
-                # gcc_feature_batch = self.doa.extract_gcc_phat_4_batch(audio_segments)
-                # gcc_feature = np.mean(gcc_feature_batch, axis=0)[np.newaxis,]
-                # state_ = gcc_feature
-                state_ = np.ones((1, 6, 128))
+                if not self.debug:
+                    gcc_feature_batch = doa.extract_gcc_phat_4_batch(audio_segments)
+                    gcc_feature = np.mean(gcc_feature_batch, axis=0)
+                    state_ = gcc_feature
+                else:
+                    state_ = np.ones((1, 6, 128))
                 ### 接入强化学习 learn
                 # 选择行为前，mask掉不可行的方向
-                action_ = agent.choose_action(state_, dirc_mask=rela_dirc_mask)
-                # _, direction_cate, = self.doa.predict(gcc_feature)
+                action_ = agent.choose_action(state_, dirc_mask=rela_dirc_mask, sample=True)
+                # _, direction_cate, = doa.predict(gcc_feature)
                 # print(direction_prob)
                 print('Predicted action_: ', action_)
-                # direction = stats.mode(direction_cate)[0][0] * 45
-                # direction = (360 - (int(action_) * 45 - 90)) % 360
-                # print("producing action ...\n", 'Direction', direction)
-                aim_loca = self.env.next_position_from_rela_action(real_node, action=action_, abs_doa=real_abs_doa)
+                # print("Producing action ...\n", 'Direction', direction)
+                aim_node = env.next_id_from_rela_action(crt_node, action=action_, abs_doa=crt_abs_doa)
+                aim_loca = env.map.coordinates[aim_node]
                 position = aim_loca
-                print('aim_loca: ', aim_loca)
+                print('aim_node: ', aim_node, 'aim_loca: ', aim_loca)
                 
                 ### 接入Owen的模块，传入aim_loca
-                if not self.debug:
-                    SSLturning(control, direction)
-                    control.speed = STEP_SIZE / FORWARD_SECONDS
-                    control.radius = 0
-                    control.omega = 0
-                    time.sleep(FORWARD_SECONDS)
-                    control.speed = 0
-                    print("movement done.")
-                print('Wait ~ ')
+                self.send_crt_position(aim_loca)
+                
+                # if not self.debug:
+                #     SSLturning(control, direction)
+                #     control.speed = STEP_SIZE / FORWARD_SECONDS
+                #     control.radius = 0
+                #     control.omega = 0
+                #     time.sleep(FORWARD_SECONDS)
+                #     control.speed = 0
+                #     print("movement done.")
+                # print('Wait ~ ')
                 
                 # 维护 done TODO
                 # 强化
@@ -431,21 +468,19 @@ class SSL:
 if __name__ == '__main__':
     os.environ["CUDA_VISIBLE_DEVICES"] = "0"
     
-    is_debug = True
+    is_debug = False
     ssl = SSL(denoise=True, seg_len='256ms', debug=is_debug)
     
-    if is_debug:
-        cd = ''
-        temp = threading.Event()
-        temp.set()
-        p1 = threading.Thread(target=ssl.loop, args=(temp, cd,))
-        p1.start()
-    else:
-        cd = CD.ControlDriver(left_right=0)
-        temp = threading.Event()
-        temp.set()
-        p2 = threading.Thread(target=cd.control_part, args=())
-        p1 = threading.Thread(target=ssl.loop, args=(temp, cd,))
-        
-        p2.start()
-        p1.start()
+    cd = ''
+    temp = threading.Event()
+    temp.set()
+    p1 = threading.Thread(target=ssl.loop, args=(temp, cd,))
+    p1.start()
+    # cd = CD.ControlDriver(left_right=0)
+    # temp = threading.Event()
+    # temp.set()
+    # p2 = threading.Thread(target=cd.control_part, args=())
+    # p1 = threading.Thread(target=ssl.loop, args=(temp, cd,))
+    #
+    # p2.start()
+    # p1.start()

@@ -1,15 +1,17 @@
-import zmq
-import random
-import sys
-import time
 
+import os, sys
+pwd = os.path.abspath(os.path.abspath(__file__))
+father_path = os.path.abspath(os.path.dirname(pwd) + os.path.sep + "..")
+sys.path.append(father_path)
 
-context = zmq.Context()
-socket = context.socket(zmq.PUB)
-socket.bind("tcp://*:5452")
+from Communication.Cpp_command import CppCommand
+from Communication.Receiver import Receiver
+cco = CppCommand.get_instance()
 
-while True:
-    topic = 10001
-    messagedata = random.randrange(1,215) - 80
-    socket.send_string("%d %d" % (topic, messagedata))
-    time.sleep(1)
+if __name__ == "__main__":
+    cco.start_navigation(mode="offline", testing="local", stdout=False)
+    # cco.start_navigation(stdout=False)
+    recvObj = Receiver(mode="local")
+    # recvObj.start_DriverControl()
+    for _ in recvObj.start_Pose():
+        print("testing", _)
