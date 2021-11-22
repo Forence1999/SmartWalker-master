@@ -73,7 +73,7 @@ class ActorCriticNetwork(keras.Model):
     def __load_ac_model__(self):
         try:
             print('-' * 20, 'Loading pre-trained Actor-Critic model!', '-' * 20, )
-            return tf.keras.models.load_model.load(self.ac_ckpt_dir)
+            return tf.keras.models.load_model(self.ac_ckpt_dir)
         except:
             print('-' * 20,
                   'Fail to load the pre-trained Actor-Critic model! Initialized model will be used for Actor-Critic!',

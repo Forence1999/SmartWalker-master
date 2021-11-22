@@ -106,7 +106,7 @@ class SSL:
         self.save_model_steps = 3
         self.save_ac_model = './model/ac_model'
         self.agent = Agent(alpha=1., num_action=num_action, gamma=0.99, ac_model_dir=self.save_ac_model,
-                           load_ac_model=False, save_model_steps=self.save_model_steps)
+                           load_ac_model=True, save_model_steps=self.save_model_steps)
         self.client = CLIENT()
     
     def __get_device_index__(self):
@@ -337,9 +337,18 @@ class SSL:
         return location
     
     def convert_map_location_2_owen(self, location):
-        location = [location[0] + 40, location[1] + 12]
+        if np.allclose(location, [60, 425]):  # 1
+            location = [120, 440]
+        elif np.allclose(location, [160, 320]):  # 2
+            location = [196, 326]
+        elif np.allclose(location, [220, 15]):  # 9
+            location = [246, 30]
+        elif np.allclose(location, [530, 220]):  # 18
+            location = [560, 232]
+        else:
+            location = [location[0] + 40, location[1] + 12]
         return location
-    
+
     def get_crt_position(self):
         # message = '[320.5940246582031,201.4725799560547,-1.5714188814163208]'
         while True:
